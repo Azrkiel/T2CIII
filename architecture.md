@@ -75,6 +75,46 @@ The following rules prevent the most common runtime crashes (topology errors, BR
 * **API Payload:** The backend generation endpoint must always return a payload containing BOTH the compiled 3D model data AND the raw CadQuery Python script string.
 * **UI Component:** The frontend must consistently bind the returned raw code string to the "CadQuery Code" viewer window. This must execute even if the 3D build fails, ensuring the code is exposed for debugging.
 
+## 6. Gemini API Prompt Engineering
+
+The following 6 constraints are injected verbatim into the Machinist agent's `system_instruction` on every Gemini API call. They represent hard-won rules that prevent specific geometric and topological failures discovered in production.
+
+### Rule 1 — 2D-to-3D for Prismatics (No Box Unions)
+* **Problem:** Assembling brackets, flanges, or L-shapes by unioning separate 3D boxes produces non-manifold seams and inconsistent edge topology.
+* **Mandatory Pattern:** Sketch the full continuous 2D footprint of the part (using lines/arcs) on a **single `Workplane`** and execute a single `.extrude()`.
+
+### Rule 2 — Organic Shapes (No `.polyline()`)
+* **Problem:** `.polyline()` generates faceted, angular geometry. Using it for smooth or ergonomic shapes (like a mouse body) produces obvious flat faces instead of smooth curvature.
+* **Mandatory Pattern:** For any shape described as "smooth", "ergonomic", or "organic", construct cross-sections using `.spline()`, `.ellipse()`, or `.circle()` — **`.polyline()` is strictly forbidden** for these shapes.
+
+### Rule 3 — Twisting Lofts (No Mid-Chain `.rotate()`)
+* **Problem:** Calling `.rotate()` mid-loft-chain causes `BRep_API` errors because the context workplane has already been consumed.
+* **Mandatory Pattern:** To twist a cross-section between loft steps, rotate the **local coordinate system of the new workplane** using `.transformed()` **before** drawing the shape:
+  ```python
+  result = (
+      cq.Workplane("XY")
+      .rect(10, 10)
+      .workplane(offset=50)
+      .transformed(rotate=cq.Vector(0, 0, 45))
+      .rect(10, 10)
+      .loft()
+  )
+  ```
+
+### Rule 4 — Hollowing (`.shell()` Only)
+* **Problem:** Boolean-subtracting a smaller copy of an organic shape from itself ("Russian Doll") creates non-manifold geometry that crashes the BRep kernel.
+* **Mandatory Pattern:** Select the face to open and apply `.shell(-thickness)`.
+
+### Rule 5 — No 2D Fillets
+* **Problem:** Calling `.fillet()` on a 2D sketch wire (e.g., directly after `.rect()`) raises a `ValueError` because no solid edges exist yet.
+* **Mandatory Pattern:** Apply `.fillet()` **only** to 3D solids — after `.loft()` or `.extrude()`.
+
+### Rule 6 — Closed Loops / Möbius Rings (`.sweep()` Required)
+* **Problem:** Lofting a ring cross-section straight up the Z-axis does not close back on itself — it produces an open tube, not a torus or continuous ring.
+* **Mandatory Pattern:** A continuous closed loop **must** use `.sweep()` along a circular or closed spline path. Do **not** attempt to close it with a loft.
+
+---
+
 ## 5. Assistant Directives (For Claude Code)
 * **Diff-Only Updates:** When modifying existing files, output ONLY the modified functions or classes. Do not rewrite unchanged code.
 * **No Filler:** Output raw code solutions and technical explanations directly. Omit conversational filler to conserve tokens.
