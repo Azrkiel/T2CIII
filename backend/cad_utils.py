@@ -169,18 +169,22 @@ def make_involute_spur_gear(
     return result
 
 
-def make_naca_airfoil(
+def make_naca_wire(
     naca_code: str = "2412",
     chord_length: float = 200.0,
-    span: float = 500.0,
-) -> cq.Workplane:
-    """Generate a NACA 4-digit airfoil as an extruded 3D solid (B-Rep volume).
+) -> cq.Wire:
+    """Generate a NACA 4-digit airfoil as a closed 2D cq.Wire.
 
-    Parses the standard 4-digit NACA designation and computes upper/lower
-    surface coordinates from the analytic thickness and camber distributions.
-    The profile is built as two B-spline edges (upper and lower surfaces)
-    via OpenCASCADE's Geom_BSplineCurve interpolation, assembled into a
-    closed wire, and extruded linearly along the span axis.
+    Computes exact upper and lower surface coordinates from the standard
+    NACA 4-digit analytic thickness and camber distributions, builds two
+    B-spline edges (upper and lower surfaces) via OpenCASCADE's
+    Geom_BSplineCurve interpolation, and assembles them into a single
+    closed, manifold cq.Wire. The wire begins and ends precisely at the
+    trailing edge and lies in the XY plane at Z=0.
+
+    This wire is the correct primitive for spanwise lofting. Position it
+    at a global Z station with wire.translate(cq.Vector(0, 0, z)) and
+    pass multiple positioned wires to cq.Solid.makeLoft().
 
     NACA 4-digit encoding:
         - Digit 1: max camber as percent of chord  (m = d1 / 100)
@@ -188,26 +192,24 @@ def make_naca_airfoil(
         - Digits 3-4: max thickness as percent      (t = d34 / 100)
 
     Coordinate system:
-        - X axis: chordwise (leading edge at -chord/2, trailing edge at +chord/2)
+        - X axis: chordwise, centered (LE at -chord/2, TE at +chord/2)
         - Y axis: thickness direction
-        - Z axis: spanwise (centered at origin)
+        - Wire lies in the XY plane at Z = 0
 
-    Uses the modified thickness coefficient (-0.1036 for x^4 term) to produce
-    a closed trailing edge (zero TE thickness), ensuring the profile wire is
-    watertight without requiring a separate closing edge.
+    Uses the modified trailing-edge coefficient (-0.1036 for the x^4 term)
+    to produce a mathematically closed trailing edge (zero TE gap), ensuring
+    the wire is watertight without a separate closing edge.
 
     Args:
         naca_code: 4-digit NACA designation string (e.g., "2412", "0012").
         chord_length: Chord length in mm.
-        span: Spanwise extrusion length in mm.
 
     Returns:
-        cq.Workplane containing the extruded 3D airfoil solid, centered
-        at the origin.
+        A closed cq.Wire in the XY plane at Z=0, centered on the chord
+        midpoint. Starts and ends at the trailing edge (+chord/2, 0, 0).
 
     Raises:
-        ValueError: If naca_code is not exactly 4 digits, or if the result
-                    is not a manifold cq.Solid.
+        ValueError: If naca_code is not exactly 4 digits.
     """
     if len(naca_code) != 4 or not naca_code.isdigit():
         raise ValueError(
@@ -241,7 +243,6 @@ def make_naca_airfoil(
 
         # Camber line and local slope
         if m == 0.0 or p == 0.0:
-            # Symmetric airfoil — no camber
             yc = 0.0
             theta = 0.0
         else:
@@ -272,18 +273,61 @@ def make_naca_airfoil(
     # ── Build closed profile wire via OCCT B-spline interpolation ──
     # Upper edge: trailing edge → leading edge (reversed point order)
     # Lower edge: leading edge → trailing edge (natural order)
-    # The two edges share exact LE and TE endpoints (yt=0 at x=0 and x=1).
+    # Both edges share exact LE and TE endpoints (yt=0 at x=0 and x=1),
+    # forming a mathematically closed loop: TE → LE (upper) → TE (lower).
     upper_edge = cq.Edge.makeSpline(list(reversed(upper_vecs)))
     lower_edge = cq.Edge.makeSpline(lower_vecs)
 
-    profile_wire = cq.Wire.assembleEdges([upper_edge, lower_edge])
+    wire = cq.Wire.assembleEdges([upper_edge, lower_edge])
+
+    # Center on chord midpoint (LE at -chord/2, TE at +chord/2)
+    wire = wire.translate(cq.Vector(-chord_length / 2.0, 0.0, 0.0))
+
+    return wire
+
+
+def make_naca_airfoil(
+    naca_code: str = "2412",
+    chord_length: float = 200.0,
+    span: float = 500.0,
+) -> cq.Workplane:
+    """Generate a NACA 4-digit airfoil as an extruded 3D solid (B-Rep volume).
+
+    Delegates to make_naca_wire() for the mathematically exact 2D profile,
+    then extrudes linearly along the span axis and centers the result at
+    the origin.
+
+    NACA 4-digit encoding:
+        - Digit 1: max camber as percent of chord  (m = d1 / 100)
+        - Digit 2: max camber location in tenths   (p = d2 / 10)
+        - Digits 3-4: max thickness as percent      (t = d34 / 100)
+
+    Coordinate system:
+        - X axis: chordwise (leading edge at -chord/2, trailing edge at +chord/2)
+        - Y axis: thickness direction
+        - Z axis: spanwise (centered at origin)
+
+    Args:
+        naca_code: 4-digit NACA designation string (e.g., "2412", "0012").
+        chord_length: Chord length in mm.
+        span: Spanwise extrusion length in mm.
+
+    Returns:
+        cq.Workplane containing the extruded 3D airfoil solid, centered
+        at the origin.
+
+    Raises:
+        ValueError: If naca_code is not exactly 4 digits, or if the result
+                    is not a manifold cq.Solid.
+    """
+    wire = make_naca_wire(naca_code, chord_length)
 
     # ── Extrude along span (Z-axis) ───────────────────────────────
-    solid = cq.Solid.extrudeLinear(profile_wire, [], cq.Vector(0, 0, span))
+    solid = cq.Solid.extrudeLinear(wire, [], cq.Vector(0, 0, span))
 
-    # Center on origin (chord centered on X, span centered on Z)
+    # Center span on origin (wire is already chord-centered)
     result = cq.Workplane("XY").newObject([solid])
-    result = result.translate((-chord_length / 2.0, 0.0, -span / 2.0))
+    result = result.translate((0.0, 0.0, -span / 2.0))
 
     # ── Topological validation ─────────────────────────────────────
     val = result.val()
