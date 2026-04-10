@@ -6,6 +6,7 @@ Form-based UI with prompt input, CadQuery code viewer, and 3D model viewer.
 
 import base64
 import json
+import os
 
 import requests
 import streamlit as st
@@ -20,7 +21,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-BACKEND_URL = "http://backend:8000"
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:8000")
 
 STEP_LABELS = {
     "planner": "Planning blueprint",
@@ -51,7 +52,8 @@ def _icon(status: str) -> str:
 
 
 def render_glb_viewer(glb_bytes: bytes, height: int = 500) -> None:
-    b64 = base64.b64encode(glb_bytes).decode("utf-8")
+    assert isinstance(height, int) and 100 <= height <= 2000
+    b64 = base64.b64encode(glb_bytes).decode("ascii")
     data_uri = f"data:model/gltf-binary;base64,{b64}"
     html = f"""
     <script type="module"

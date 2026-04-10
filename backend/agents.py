@@ -34,6 +34,23 @@ MODEL = "gemini-2.5-flash"
 # Directory for pre-compiled .step files consumed by the deterministic assembler
 _TMP_PARTS_DIR = pathlib.Path(__file__).parent / "tmp_parts"
 
+_SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _sanitize_part_id(raw: str) -> str:
+    """Strip part_id to alphanumeric + underscore only (max 64 chars)."""
+    return _SAFE_ID_RE.sub("_", raw)[:64] or "unnamed_part"
+
+
+def cleanup_tmp_parts() -> None:
+    """Remove all files from the tmp_parts directory."""
+    if _TMP_PARTS_DIR.exists():
+        for f in _TMP_PARTS_DIR.iterdir():
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
 
 class ScriptError(RuntimeError):
     """RuntimeError subclass that carries the last attempted CadQuery script."""
@@ -211,20 +228,22 @@ async def _save_part_step(part_id: str, script: str) -> str:
     Re-executes the validated script with an appended export stanza.
     Returns the absolute path to the saved .step file.
     """
+    safe_id = _sanitize_part_id(part_id)
     _TMP_PARTS_DIR.mkdir(exist_ok=True)
-    step_path = (_TMP_PARTS_DIR / f"{part_id}.step").resolve()
+    step_path = (_TMP_PARTS_DIR / f"{safe_id}.step").resolve()
+    if not str(step_path).startswith(str(_TMP_PARTS_DIR.resolve())):
+        raise ValueError(f"Path traversal detected in part_id: {part_id!r}")
     safe_path = step_path.as_posix()
 
     export_script = (
         f"{script}\n\n"
-        f"import cadquery as cq, os\n"
-        f"os.makedirs(os.path.dirname(r'{safe_path}'), exist_ok=True)\n"
+        f"import cadquery as cq\n"
         f"if isinstance(result, cq.Assembly):\n"
         f"    result.save(r'{safe_path}')\n"
         f"else:\n"
         f"    cq.exporters.export(result, r'{safe_path}')\n"
     )
-    await execute_cad_script(export_script, trusted=True)
+    await execute_cad_script(export_script)
     return safe_path
 
 
@@ -362,6 +381,8 @@ def run_assembler(
         if pid in added or pid not in step_files:
             continue
 
+        safe_pid = _sanitize_part_id(pid)
+
         # Find translation: look for a mating rule where this part is the target.
         # The base/first part is never a target — defaults to origin (0, 0, 0).
         tx, ty, tz = 0.0, 0.0, 0.0
@@ -372,11 +393,11 @@ def run_assembler(
                 break
 
         safe_path = step_files[pid].replace("\\", "/")
-        var = pid.replace("-", "_").replace(" ", "_")
+        var = safe_pid if safe_pid.isidentifier() else f"part_{safe_pid}"
 
         lines.append(f"{var} = cq.importers.importStep(r'{safe_path}')")
         lines.append(
-            f"assembly.add({var}, name='{pid}', "
+            f"assembly.add({var}, name='{safe_pid}', "
             f"loc=cq.Location(cq.Vector({tx}, {ty}, {tz})))"
         )
         lines.append("")

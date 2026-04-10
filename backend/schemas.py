@@ -37,6 +37,7 @@ class PartDefinition(BaseModel):
 
     part_id: str = Field(
         ...,
+        max_length=200,
         description=(
             "A unique, snake_case identifier for this part (e.g., 'base_plate', "
             "'motor_housing', 'm5_bolt'). This ID is referenced by MatingRules "
@@ -47,6 +48,7 @@ class PartDefinition(BaseModel):
 
     description: str = Field(
         ...,
+        max_length=2000,
         description=(
             "A detailed physical description of the part that the Machinist "
             "subagent will use to write CadQuery code. Include ALL geometric "
@@ -164,6 +166,7 @@ class AssemblyManifest(BaseModel):
 
     assembly_name: str = Field(
         ...,
+        max_length=200,
         description=(
             "A descriptive, snake_case name for the overall assembly "
             "(e.g., 'flanged_bearing_mount', 'gearbox_housing'). Used as the "
@@ -199,7 +202,24 @@ class AssemblyManifest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_mating_rule_refs(self) -> "AssemblyManifest":
+    def _validate_manifest(self) -> "AssemblyManifest":
+        # --- Size limits (not expressible in Gemini's schema) ---
+        if len(self.parts) > 50:
+            raise ValueError(
+                f"Too many parts ({len(self.parts)}). Maximum is 50."
+            )
+        if len(self.mating_rules) > 100:
+            raise ValueError(
+                f"Too many mating rules ({len(self.mating_rules)}). Maximum is 100."
+            )
+        for part in self.parts:
+            if len(part.anchor_tags) > 20:
+                raise ValueError(
+                    f"Part '{part.part_id}' has {len(part.anchor_tags)} "
+                    f"anchor tags. Maximum is 20."
+                )
+
+        # --- Referential integrity ---
         valid_ids = {p.part_id for p in self.parts}
         for rule in self.mating_rules:
             if rule.source_part_id not in valid_ids:

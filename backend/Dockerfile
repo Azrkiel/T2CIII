@@ -6,11 +6,8 @@ RUN conda create -n cadenv python=3.10 -y && \
     conda clean -afy
 
 # Install Python dependencies inside the conda environment
-RUN /opt/conda/envs/cadenv/bin/pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    pydantic \
-    google-generativeai
+COPY requirements.txt /tmp/requirements.txt
+RUN /opt/conda/envs/cadenv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
 WORKDIR /app
 

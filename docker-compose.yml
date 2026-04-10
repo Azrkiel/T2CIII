@@ -5,7 +5,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
+      - ./backend:/app:ro
+      - backend_tmp_parts:/app/tmp_parts
+      - backend_telemetry:/app/telemetry_logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=256M
     env_file:
       - .env
 
@@ -15,6 +20,10 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./frontend:/app
+      - ./frontend:/app:ro
     depends_on:
       - backend
+
+volumes:
+  backend_tmp_parts:
+  backend_telemetry:
